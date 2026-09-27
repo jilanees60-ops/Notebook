@@ -1,0 +1,6 @@
+{
+  "name": "JNAS Notebook",
+  "description": "Personal OneNote-style digital notebook with offline-first sync, rich block-based notes, checklists, and Supabase integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
