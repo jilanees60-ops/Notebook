@@ -138,7 +138,7 @@ export interface PageVersion {
   created_at: string;
 }
 
-export type SyncStatus = 'idle' | 'saving' | 'saved' | 'syncing' | 'synced' | 'offline' | 'error';
+export type SyncStatus = 'idle' | 'saving' | 'saved' | 'syncing' | 'synced' | 'offline' | 'error' | 'local';
 
 export interface SyncQueueItem {
   id: string;

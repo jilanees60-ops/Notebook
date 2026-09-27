@@ -9,6 +9,7 @@ import {
   RefreshCw,
   CloudOff,
   AlertCircle,
+  HardDrive,
 } from 'lucide-react';
 
 interface TopNavBarProps {
@@ -22,10 +23,23 @@ export const TopNavBar: React.FC<TopNavBarProps> = ({
   onOpenGlobalSearch,
   onOpenSettings,
 }) => {
-  const { syncStatus, syncMessage, triggerManualSync } = useNotebook();
+  const { syncStatus, syncMessage, triggerManualSync, currentUser } = useNotebook();
 
   // Very small, quiet autosave / sync status indicator
   const renderSyncIndicator = () => {
+    // If not authenticated with Supabase or in local mode
+    if (!currentUser || syncStatus === 'local') {
+      return (
+        <div
+          className="flex items-center gap-1 text-[11px] text-slate-400 dark:text-slate-500 px-1.5 py-0.5"
+          title="Working locally in IndexedDB"
+        >
+          <HardDrive className="w-3 h-3 text-slate-400" />
+          <span>Local only</span>
+        </div>
+      );
+    }
+
     switch (syncStatus) {
       case 'saving':
       case 'syncing':

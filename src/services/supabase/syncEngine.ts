@@ -1,12 +1,14 @@
-import { getSupabaseClient } from './client';
+import { getSupabaseClient, getSupabaseSession } from './client';
 import { indexedDb } from '../db/indexedDb';
 import { SyncStatus, SyncQueueItem } from '../../types/notebook';
 
 type SyncListener = (status: SyncStatus, message?: string) => void;
+type DataPulledListener = () => void;
 
 class SyncEngine {
   private listeners: Set<SyncListener> = new Set();
-  private currentStatus: SyncStatus = 'idle';
+  private dataPulledListeners: Set<DataPulledListener> = new Set();
+  private currentStatus: SyncStatus = 'saved';
   private isSyncing = false;
   private syncTimer: any = null;
 
@@ -31,6 +33,13 @@ class SyncEngine {
     };
   }
 
+  public onDataPulled(listener: DataPulledListener): () => void {
+    this.dataPulledListeners.add(listener);
+    return () => {
+      this.dataPulledListeners.delete(listener);
+    };
+  }
+
   public setStatus(status: SyncStatus, message?: string) {
     this.currentStatus = status;
     this.listeners.forEach((listener) => listener(status, message));
@@ -40,7 +49,7 @@ class SyncEngine {
     return this.currentStatus;
   }
 
-  public scheduleSync(delayMs = 1500) {
+  public scheduleSync(delayMs = 1200) {
     if (this.syncTimer) {
       clearTimeout(this.syncTimer);
     }
@@ -52,6 +61,7 @@ class SyncEngine {
 
   public async sync(): Promise<void> {
     if (this.isSyncing) return;
+
     if (typeof navigator !== 'undefined' && !navigator.onLine) {
       this.setStatus('offline', 'Offline. Changes stored locally in IndexedDB.');
       return;
@@ -59,8 +69,19 @@ class SyncEngine {
 
     const client = getSupabaseClient();
     if (!client) {
-      // Offline / Local-only mode
-      this.setStatus('saved', 'Saved locally in IndexedDB');
+      // Local-only mode (No Supabase client configured)
+      this.setStatus('local', 'Local only (IndexedDB)');
+      return;
+    }
+
+    // Verify authenticated cloud session
+    const session = await getSupabaseSession();
+    const authUserId = session?.user?.id;
+
+    if (!authUserId) {
+      // User is not authenticated with Supabase.
+      // Strictly do not attempt cloud writes with a fake user ID!
+      this.setStatus('local', 'Local only');
       return;
     }
 
@@ -72,14 +93,13 @@ class SyncEngine {
       const queue = await indexedDb.getSyncQueue();
       for (const item of queue) {
         try {
-          await this.processQueueItem(client, item);
+          await this.processQueueItem(client, item, authUserId);
           await indexedDb.dequeueSync(item.id);
         } catch (itemErr) {
           console.warn(`Error syncing item ${item.table} ${item.record_id}:`, itemErr);
-          // Increment retry count
           item.retry_count = (item.retry_count || 0) + 1;
           if (item.retry_count > 5) {
-            // Drop problematic item after 5 failed tries
+            // Drop problematic item after 5 failed tries to unblock queue
             await indexedDb.dequeueSync(item.id);
           } else {
             await indexedDb.enqueueSync(item);
@@ -87,16 +107,16 @@ class SyncEngine {
         }
       }
 
-      // 2. Pull Remote Changes (if user is authenticated in Supabase)
-      const { data: { session } } = await client.auth.getSession();
-      if (session?.user) {
-        await this.pullRemoteData(client, session.user.id);
+      // 2. Pull Remote Changes for this authenticated user
+      const pulled = await this.pullRemoteData(client, authUserId);
+      if (pulled) {
+        this.dataPulledListeners.forEach((listener) => listener());
       }
 
       this.setStatus('synced', 'Synced with cloud');
       setTimeout(() => {
         if (this.currentStatus === 'synced') {
-          this.setStatus('saved', 'All changes saved');
+          this.setStatus('saved', 'Saved');
         }
       }, 3000);
     } catch (err: any) {
@@ -107,21 +127,33 @@ class SyncEngine {
     }
   }
 
-  private async processQueueItem(client: any, item: SyncQueueItem): Promise<void> {
+  private async processQueueItem(client: any, item: SyncQueueItem, authUserId: string): Promise<void> {
     const { table, action, payload } = item;
 
     if (action === 'delete') {
-      const { error } = await client.from(table).delete().eq('id', item.record_id);
+      // Enforce user ownership on delete
+      const { error } = await client
+        .from(table)
+        .delete()
+        .eq('id', item.record_id)
+        .eq('user_id', authUserId);
       if (error) throw error;
       return;
     }
 
-    // Insert or update (upsert)
-    const { error } = await client.from(table).upsert(payload);
+    // Attach verified authenticated user_id to satisfy Supabase RLS
+    const remotePayload = {
+      ...payload,
+      user_id: authUserId,
+    };
+
+    // Upsert record into authenticated user's private database
+    const { error } = await client.from(table).upsert(remotePayload);
     if (error) throw error;
   }
 
-  private async pullRemoteData(client: any, userId: string): Promise<void> {
+  private async pullRemoteData(client: any, userId: string): Promise<boolean> {
+    let hasPulledAny = false;
     try {
       // Pull notebooks
       const { data: remoteNotebooks } = await client
@@ -130,8 +162,13 @@ class SyncEngine {
         .eq('user_id', userId);
 
       if (remoteNotebooks && remoteNotebooks.length > 0) {
-        for (const nb of remoteNotebooks) {
-          await indexedDb.saveNotebook(nb);
+        const localNotebooks = await indexedDb.getNotebooks(true);
+        for (const remote of remoteNotebooks) {
+          const local = localNotebooks.find((n) => n.id === remote.id);
+          if (!local || new Date(remote.updated_at) >= new Date(local.updated_at)) {
+            await indexedDb.saveNotebook(remote);
+            hasPulledAny = true;
+          }
         }
       }
 
@@ -142,8 +179,13 @@ class SyncEngine {
         .eq('user_id', userId);
 
       if (remoteSections && remoteSections.length > 0) {
-        for (const sec of remoteSections) {
-          await indexedDb.saveSection(sec);
+        const localSections = await indexedDb.getSections(undefined, true);
+        for (const remote of remoteSections) {
+          const local = localSections.find((s) => s.id === remote.id);
+          if (!local || new Date(remote.updated_at) >= new Date(local.updated_at)) {
+            await indexedDb.saveSection(remote);
+            hasPulledAny = true;
+          }
         }
       }
 
@@ -154,8 +196,12 @@ class SyncEngine {
         .eq('user_id', userId);
 
       if (remotePages && remotePages.length > 0) {
-        for (const page of remotePages) {
-          await indexedDb.savePage(page);
+        for (const remote of remotePages) {
+          const local = await indexedDb.getPage(remote.id);
+          if (!local || new Date(remote.updated_at) >= new Date(local.updated_at)) {
+            await indexedDb.savePage(remote);
+            hasPulledAny = true;
+          }
         }
       }
 
@@ -167,10 +213,12 @@ class SyncEngine {
 
       if (remoteBlocks && remoteBlocks.length > 0) {
         await indexedDb.saveBlocks(remoteBlocks);
+        hasPulledAny = true;
       }
     } catch (pullErr) {
       console.warn('Failed to pull some remote data:', pullErr);
     }
+    return hasPulledAny;
   }
 }
 

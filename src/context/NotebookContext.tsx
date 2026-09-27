@@ -12,7 +12,11 @@ import {
   PaperStyle,
 } from '../types/notebook';
 import { indexedDb } from '../services/db/indexedDb';
-import { getCurrentUser } from '../services/supabase/client';
+import {
+  getCurrentUser,
+  subscribeToAuthChanges,
+  signOutSupabase,
+} from '../services/supabase/client';
 import { syncEngine } from '../services/supabase/syncEngine';
 
 interface NotebookContextType {
@@ -31,7 +35,9 @@ interface NotebookContextType {
   syncStatus: SyncStatus;
   syncMessage: string;
   currentUser: { id: string; email?: string } | null;
+  isLocalOnly: boolean;
   isInitialized: boolean;
+  signOut: () => Promise<void>;
   activeView: 'notebook' | 'favorites' | 'recent' | 'trash' | 'tag';
   setActiveView: (view: 'notebook' | 'favorites' | 'recent' | 'trash' | 'tag') => void;
   selectedTagId: string | null;
@@ -106,15 +112,6 @@ export const NotebookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const blocksRef = useRef<Block[]>([]);
   blocksRef.current = blocks;
 
-  // Track sync engine status
-  useEffect(() => {
-    const unsubscribe = syncEngine.subscribe((status, msg) => {
-      setSyncStatus(status);
-      if (msg) setSyncMessage(msg);
-    });
-    return unsubscribe;
-  }, []);
-
   // Initialize DB and Seed Data
   const initialize = useCallback(async () => {
     try {
@@ -180,6 +177,34 @@ export const NotebookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  // Real-time Supabase Auth state listener
+  useEffect(() => {
+    const unsubAuth = subscribeToAuthChanges((event, session) => {
+      if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+        if (session?.user?.id) {
+          setCurrentUser({
+            id: session.user.id,
+            email: session.user.email,
+          });
+          syncEngine.sync();
+        }
+      } else if (event === 'SIGNED_OUT') {
+        setCurrentUser(null);
+        syncEngine.setStatus('local', 'Local only');
+      }
+    });
+
+    return () => {
+      unsubAuth();
+    };
+  }, []);
+
+  const signOut = useCallback(async () => {
+    await signOutSupabase();
+    setCurrentUser(null);
+    syncEngine.setStatus('local', 'Local only');
+  }, []);
 
   // Set Active Notebook & reload sections
   const setActiveNotebook = useCallback(async (nb: Notebook | null) => {
@@ -308,6 +333,21 @@ export const NotebookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const loadedPageTags = await indexedDb.getPageTags();
     setPageTags(loadedPageTags);
   }, [activeNotebook, activeSection, activePage]);
+
+  // Track sync engine status and remote data updates
+  useEffect(() => {
+    const unsubStatus = syncEngine.subscribe((status, msg) => {
+      setSyncStatus(status);
+      if (msg) setSyncMessage(msg);
+    });
+    const unsubPulled = syncEngine.onDataPulled(() => {
+      refreshAllData();
+    });
+    return () => {
+      unsubStatus();
+      unsubPulled();
+    };
+  }, [refreshAllData]);
 
   // Queue helper
   const enqueueChange = async (
@@ -772,12 +812,23 @@ export const NotebookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const insertBlocks = async (newBlocks: Block[], position?: number) => {
     if (!activePage || newBlocks.length === 0) return;
-    const currentBlocks = blocksRef.current;
+    const currentBlocks = [...blocksRef.current];
     const pos = position !== undefined ? position : currentBlocks.length;
 
-    const updatedBlocks = [...currentBlocks];
-    updatedBlocks.splice(pos, 0, ...newBlocks);
-    const reindexed = updatedBlocks.map((b, idx) => ({ ...b, position: idx }));
+    const toInsert: Block[] = [];
+    for (const b of newBlocks) {
+      const existingIdx = currentBlocks.findIndex((cur) => cur.id === b.id);
+      if (existingIdx !== -1) {
+        currentBlocks[existingIdx] = { ...currentBlocks[existingIdx], ...b, updated_at: new Date().toISOString() };
+      } else {
+        toInsert.push(b);
+      }
+    }
+
+    if (toInsert.length > 0) {
+      currentBlocks.splice(pos, 0, ...toInsert);
+    }
+    const reindexed = currentBlocks.map((b, idx) => ({ ...b, position: idx }));
 
     setBlocks(reindexed);
     await indexedDb.saveBlocks(reindexed);
@@ -982,7 +1033,9 @@ export const NotebookProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         syncStatus,
         syncMessage,
         currentUser,
+        isLocalOnly: !currentUser,
         isInitialized,
+        signOut,
         activeView,
         setActiveView,
         selectedTagId,

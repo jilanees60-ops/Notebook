@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import { Block } from '../../../types/notebook';
 import { Info, AlertTriangle, Lightbulb, Bookmark } from 'lucide-react';
 
@@ -9,7 +9,14 @@ interface CalloutBlockProps {
 }
 
 export const CalloutBlock: React.FC<CalloutBlockProps> = ({ block, onUpdate, onKeyDown }) => {
+  const contentRef = useRef<HTMLDivElement>(null);
   const calloutType = block.metadata?.calloutType || 'info';
+
+  useEffect(() => {
+    if (contentRef.current && document.activeElement !== contentRef.current && contentRef.current.innerText !== block.content) {
+      contentRef.current.innerText = block.content;
+    }
+  }, [block.id, block.content]);
 
   const types = [
     { id: 'info', icon: Info, bg: 'bg-sky-50 dark:bg-sky-950/40', border: 'border-sky-300 dark:border-sky-800', text: 'text-sky-600 dark:text-sky-400' },
@@ -45,15 +52,18 @@ export const CalloutBlock: React.FC<CalloutBlockProps> = ({ block, onUpdate, onK
 
       <div className="flex-1 min-w-0">
         <div
+          ref={contentRef}
           contentEditable
           suppressContentEditableWarning
-          onInput={(e) => onUpdate((e.target as HTMLDivElement).innerText, block.metadata)}
+          onInput={() => {
+            if (contentRef.current) {
+              onUpdate(contentRef.current.innerText, block.metadata);
+            }
+          }}
           onKeyDown={(e) => onKeyDown(e, block)}
           data-placeholder="Important takeaway or callout message..."
           className="w-full text-sm text-slate-800 dark:text-slate-200 outline-none leading-relaxed empty:before:content-[attr(data-placeholder)] empty:before:text-slate-400"
-        >
-          {block.content}
-        </div>
+        />
       </div>
     </div>
   );

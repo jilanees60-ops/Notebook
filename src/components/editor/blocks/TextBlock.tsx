@@ -28,7 +28,7 @@ export const TextBlock: React.FC<TextBlockProps> = ({
         }
       }
     }
-  }, [block.id]);
+  }, [block.id, block.content]);
 
   useEffect(() => {
     if (isFocused && contentRef.current) {

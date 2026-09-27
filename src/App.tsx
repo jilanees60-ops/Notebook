@@ -8,9 +8,12 @@ import { GlobalSearchModal } from './components/modals/GlobalSearchModal';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { VersionHistoryModal } from './components/modals/VersionHistoryModal';
 import { TrashModal } from './components/modals/TrashModal';
+import { ConnectNotebookScreen } from './components/auth/ConnectNotebookScreen';
+import { isLocalOnlyPreferred } from './services/supabase/client';
 
 const NotebookAppContent: React.FC = () => {
-  const { isInitialized } = useNotebook();
+  const { isInitialized, currentUser } = useNotebook();
+  const [isLocalMode, setIsLocalMode] = useState<boolean>(() => isLocalOnlyPreferred());
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [isFocusMode, setIsFocusMode] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -26,6 +29,16 @@ const NotebookAppContent: React.FC = () => {
         </div>
         <p className="text-xs font-medium text-slate-400">Opening notebook...</p>
       </div>
+    );
+  }
+
+  // First run connection screen: Shown only when unauthenticated and not set to local mode
+  if (!currentUser && !isLocalMode) {
+    return (
+      <ConnectNotebookScreen
+        onConnected={() => {}}
+        onContinueLocal={() => setIsLocalMode(true)}
+      />
     );
   }
 

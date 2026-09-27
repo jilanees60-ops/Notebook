@@ -1,5 +1,5 @@
-export const SUPABASE_SQL_SCHEMA = `-- JNAS Notebook — Supabase PostgreSQL Schema & Security Blueprint
--- Run this in your Supabase project's SQL Editor (SQL Editor -> New Query -> Run)
+-- JNAS Notebook — Supabase PostgreSQL Schema & Security Migration
+-- Migration: 20260927000000_jnas_schema.sql
 
 -- 1. Enable UUID Extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -90,15 +90,14 @@ CREATE TABLE IF NOT EXISTS page_tags (
 CREATE TABLE IF NOT EXISTS page_versions (
   id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
   page_id TEXT REFERENCES pages(id) ON DELETE CASCADE NOT NULL,
-  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  user_id REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
   title TEXT NOT NULL,
   blocks_snapshot JSONB NOT NULL,
   snapshot_reason TEXT DEFAULT 'Manual Snapshot',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- 9. Row Level Security (RLS) Policies
--- Ensure strict single-user ownership on all tables!
+-- 9. Row Level Security (RLS)
 ALTER TABLE notebooks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sections ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pages ENABLE ROW LEVEL SECURITY;
@@ -107,31 +106,24 @@ ALTER TABLE tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE page_tags ENABLE ROW LEVEL SECURITY;
 ALTER TABLE page_versions ENABLE ROW LEVEL SECURITY;
 
--- Notebooks Policies
 CREATE POLICY "Users own notebooks access" ON notebooks
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- Sections Policies
 CREATE POLICY "Users own sections access" ON sections
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- Pages Policies
 CREATE POLICY "Users own pages access" ON pages
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- Blocks Policies
 CREATE POLICY "Users own blocks access" ON blocks
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- Tags Policies
 CREATE POLICY "Users own tags access" ON tags
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- Page Tags Policies
 CREATE POLICY "Users own page tags access" ON page_tags
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
--- Page Versions Policies
 CREATE POLICY "Users own page versions access" ON page_versions
   FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
 
@@ -154,7 +146,6 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('notebook_assets', 'notebook_assets', false)
 ON CONFLICT (id) DO UPDATE SET public = false;
 
--- Storage RLS: strictly authenticated user with folder matching their auth.uid()
 CREATE POLICY "Users can upload their own assets"
 ON storage.objects FOR INSERT
 TO authenticated
@@ -169,4 +160,3 @@ CREATE POLICY "Users can delete their own assets"
 ON storage.objects FOR DELETE
 TO authenticated
 USING (bucket_id = 'notebook_assets' AND (storage.foldername(name))[1] = auth.uid()::text);
-`;

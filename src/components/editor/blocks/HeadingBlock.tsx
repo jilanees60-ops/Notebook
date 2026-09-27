@@ -17,10 +17,10 @@ export const HeadingBlock: React.FC<HeadingBlockProps> = ({
   const contentRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (contentRef.current && contentRef.current.innerText !== block.content) {
+    if (contentRef.current && document.activeElement !== contentRef.current && contentRef.current.innerText !== block.content) {
       contentRef.current.innerText = block.content;
     }
-  }, [block.id]);
+  }, [block.id, block.content]);
 
   useEffect(() => {
     if (isFocused && contentRef.current) {
