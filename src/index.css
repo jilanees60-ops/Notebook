@@ -45,3 +45,20 @@
   background-size: 20px 20px;
 }
 
+/* Contenteditable placeholder styling for empty blocks */
+[contenteditable][data-placeholder]:empty::before,
+[contenteditable][data-placeholder]:has(> br:only-child)::before,
+[contenteditable][data-placeholder][data-empty="true"]::before {
+  content: attr(data-placeholder);
+  color: #94a3b8;
+  pointer-events: none;
+  cursor: text;
+  display: block;
+}
+
+.dark [contenteditable][data-placeholder]:empty::before,
+.dark [contenteditable][data-placeholder]:has(> br:only-child)::before,
+.dark [contenteditable][data-placeholder][data-empty="true"]::before {
+  color: #475569;
+}
+
